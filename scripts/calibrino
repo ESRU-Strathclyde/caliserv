@@ -1,0 +1,221 @@
+#!/usr/bin/env Rscript
+
+#LOADING REQUIRED PACKAGES (silently!!!)
+suppressMessages(library(modeest, quietly = T))
+library(methods)
+library(optparse)
+library(calibro, quietly = T)
+
+#TURNS OFF WARNINGS
+options(warn = -1)
+
+#DEFINES INPUT OPTIONS
+opt.list = list(
+	make_option(
+		opt_str = c('-c', '--cal'),
+		type='character', 
+		default='myCalibration', 
+		help='calibration name', 
+		metavar='character'
+	),
+	make_option(
+		opt_str = c('-o', '--obs'), 
+		type='character', 
+		default=NULL, 
+		help='observation file path', 
+		metavar='character'
+	),
+	make_option(
+		opt_str = c('-s', '--sim'), 
+		type='character', 
+		default=NULL, 
+		help='simulation file path', 
+		metavar='character'
+	),
+	make_option(
+		opt_str = c('-i', '--input'), 
+		type='character', 
+		default=NULL, 
+		help='input file path', 
+		metavar='character'
+	),
+	make_option(
+		opt_str = c('-b', '--bc'), 
+		type='character', 
+		default=NULL, 
+		help='boundary conditions file name', 
+		metavar='character'
+	),
+	make_option(
+		opt_str = c('-a', '--alg'), 
+		type='character', 
+		default='amg', 
+		help='algorithm to use for calibration', 
+		metavar='character'
+	),
+	make_option(
+		opt_str = c('-r', '--res'), 
+		type='character', 
+		default='cal', 
+		help='comma separeted strings indicating the results to return. cal: calibration (default), sa: sensitivity analysis, 
+			ret: factor retention, train: training, ds: input data sets (only for pdf format)', 
+		metavar='character'
+	),
+	make_option(
+		opt_str = c('-f', '--fmt'), 
+		type='character', 
+		default='json', 
+		help='comma separeted strings indicating the output formats. json: JSON file (default),  pdf: PDF file', 
+		metavar='character'
+	),
+	make_option(
+		opt_str = c('-v', '--vrb'), 
+		type='numeric', 
+		default= 1, 
+		help='verbose level (0, or 1)', 
+		metavar='numeric'
+	),
+	make_option(
+		opt_str = '--citation',
+		type = 'logical',
+		action = 'store_true',
+		default = F,
+		help = 'prints bibtex citation for Calibro.',
+		metavar = 'logical'
+	),
+	make_option(
+		opt_str = '--version',
+		type = 'logical',
+		action = 'store_true',
+		default = F,
+		help = 'prints the current version of Calibro.',
+		metavar = 'logical'
+	),
+	make_option(
+		opt_str = c('-n', '--ncores'),
+		type = 'numeric', 
+		default = 1,
+		help = 'number of cores (corresponding to the number of Markov chains) to employ.'
+	)
+)
+
+#_MAIN_
+
+#create parser
+opt.parser = OptionParser(option_list=opt.list, prog = 'calibrino')
+
+#parse arguments
+args = parse_args(opt.parser)
+
+#start executing instructions
+if (args[['citation']]) {
+
+	calibro.citation()
+
+} else if (args[['version']]) {
+
+	cat.calibro_version()
+
+} else {	
+
+	#~CHECK INPUTS
+	input.names = c('obs', 'sim', 'input')
+	for (nm in input.names) {
+		if (is.null(args[[nm]])) {
+			stop(paste('argument', nm, 'missing. Use option -h or --help to show help message.'), call. = F)
+		}
+	}
+	#~
+		
+	#~INTRO MESSAGE
+	if (args[['vrb']] > 0) cat(paste0('\nThis is ', calibro_version, '\n\nStarting calibration...\n\n'))
+	#~
+		
+	#~SPLITS INPUTS ACCORDING TO COMMAS
+	OBS = strsplit(args[['obs']], ',')[[1]]
+	SIM = strsplit(args[['sim']], ',')[[1]]
+	IN = strsplit(args[['input']], ',')[[1]]
+#	BC = strsplit(args[['bc']], ',')[[1]]	#uncomment to enable boundary conditions 
+	RES = strsplit(args[['res']], ',')[[1]]
+	FMT = strsplit(args[['fmt']], ',')[[1]]
+	#~
+	
+	#~CHECK LENGTH
+	if (length(OBS) != length(SIM)) stop('number of observation and simulation files must be equal.')
+	if (length(IN) == 1) {
+		IN = rep(IN, length(OBS))
+	} else if (length(IN) != 1 && length(IN) != length(OBS)) {
+		stop('number of input files must be equal to one or the number of observation files.')
+	}
+	#if (length(BC) == 1) {
+	#	BC = rep(BC, length(OBS))
+	#} else if (length(BC) > 1 && length(BC) != length(OBS)) {
+	#	stop('number of input files must be equal to one or the number of observation files.')
+	#}
+	#~
+	
+	#~STORES THE DATA
+	CE = calEnv$new(name = args[['cal']])	#Create a new calibration environment
+	#~Adds datasets
+	for (i in 1:length(OBS)) {
+		CE$add.ds(
+			name = paste0('data_', i),	
+			Y.star = OBS[[i]],			
+#			X = BC[[i]],	#uncomment to enable boundary conditions				
+			TT = IN[[i]],				
+			Y = SIM[[i]]				
+		)
+	}
+
+	#~PRINCIPAL COMPONENET ANALYSIS
+	if (args[['vrb']] > 0) cat('Performaing Principal Componenet Analysis...')
+	CE$rd = 'pca'
+	if (args[['vrb']] > 0) cat('done\n')
+	#~
+
+	#~SENSITIVITY ANALYSIS
+	if (args[['vrb']] > 0) cat('Performing Sensitivity Analysis...')
+	CE$sa = 'sobolSmthSpl'
+	if (args[['vrb']] > 0) cat('done\n')
+	#~
+	
+	#~FACTOR RETENTION
+	if (args[['vrb']] > 0) cat('Performing Factor Retention...')
+	CE$ret = list(mthd = 'ng.screening')
+	if (args[['vrb']] > 0) cat('done\n')
+	#~
+	
+	#~BUILDS EMULATOR
+	if (args[['vrb']] > 0)cat('Building Emulator...')
+	CE$mdls = 'gpr.ng.sePar01_whitePar01'
+	if (args[['vrb']] > 0) cat('done\n')
+	#~
+
+	#~TRAINING
+	if (args[['vrb']] > 0) cat('Training Emulator...')
+	CE$train = list(type = 'training', alg = 'amoeba', vrb = 0)
+	if (args[['vrb']] > 0) cat('done\n')
+	#~
+
+	#~BUILD CALIBRATOR
+	if (args[['vrb']] > 0) cat('Building Calibrator...')
+	CE$cals = 'cal.gpr.ng'
+	if (args[['vrb']] > 0) cat('done\n')
+	#~
+
+	#CALIBRATING
+	if (args[['vrb']] > 0) cat('Calibrating...\n')
+	nc = args[['ncores']]
+	if (args[['alg']] == 'ais') {
+		CE$cal.mcmc = list(alg = args[['alg']], step = 'ram', m = nc, n = 1000, vrb = args[['vrb']])
+	} else {
+		CE$cal.mcmc = list(alg = args[['alg']], m = nc, n = 1000, vrb = args[['vrb']])
+	}
+	if (args[['vrb']] > 0) cat('done\n')
+	#~
+	
+	for (f in FMT) CE$genReport(type = f, out = RES)
+
+	#~CLOSING MESSAGE
+	if (args[['vrb']] > 0) cat(paste0('\nCalibration completed, results are in the files: ',  paste0('calibro_report.', FMT, collapse = ', '), '\n\n'))
+}
